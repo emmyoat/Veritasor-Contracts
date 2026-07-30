@@ -683,6 +683,9 @@ pub struct PermitCancelledEvent {
     pub business: Address,
     /// Nonce value that was burned.
     pub nonce: u64,
+    /// The expiry timestamp that was declared in the `CancelPermit` payload.
+    /// `0` means the cancel permit had no expiry (never-expiring).
+    pub permit_expiry_ts: u64,
 }
 
 /// Normalized payload for `EpochAdvanced` events.
@@ -981,10 +984,11 @@ pub fn emit_attestation_cleaned_up(env: &Env, business: &Address, period: &Strin
 /// # Events
 ///
 /// Publishes `(perm_canc, business)` → `PermitCancelledEvent`.
-pub fn emit_permit_cancelled(env: &Env, business: &Address, nonce: u64) {
+pub fn emit_permit_cancelled(env: &Env, business: &Address, nonce: u64, permit_expiry_ts: u64) {
     let event = PermitCancelledEvent {
         business: business.clone(),
         nonce,
+        permit_expiry_ts,
     };
     env.events()
         .publish((TOPIC_PERMIT_CANCELLED, business.clone()), event);

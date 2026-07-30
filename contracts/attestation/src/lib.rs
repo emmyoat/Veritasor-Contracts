@@ -128,11 +128,23 @@ pub struct BatchAttestationItem {
 /// The business signs this struct (by including it in a Soroban function call
 /// that authenticates via `require_auth`) to invalidate any pending permit
 /// created with the same nonce value on `NONCE_CHANNEL_PERMIT`.
+///
+/// # Fields
+/// - `business`         – the address that signed and owns the permit.
+/// - `nonce`            – the replay-protection nonce tied to this permit.
+/// - `permit_expiry_ts` – Unix timestamp (seconds) after which this cancel
+///   permit itself expires. The contract rejects the call **before** consuming
+///   the nonce when `now > permit_expiry_ts`, so the nonce is preserved and
+///   can be used again with a fresh (non-expired) cancel permit. Setting this
+///   to `0` disables the expiry check (the permit never expires on its own).
 #[contracttype]
 #[derive(Clone, Debug)]
 pub struct CancelPermit {
     pub business: Address,
     pub nonce: u64,
+    /// Unix timestamp (seconds) after which this cancel permit is rejected
+    /// without consuming the nonce. Set to `0` to disable expiry.
+    pub permit_expiry_ts: u64,
 }
 
 /// Maximum number of items allowed in a single batch submission.
@@ -658,22 +670,49 @@ impl AttestationContract {
     /// the nonce is consumed, any pre-signed delegated-submission permit
     /// using the same nonce is permanently invalid.
     ///
+    /// ## Expiry behaviour
+    ///
+    /// When `cancel_permit.permit_expiry_ts` is non-zero and the current ledger
+    /// timestamp is **strictly greater** than that value, the call is rejected
+    /// with `"cancel permit has expired"` and **the nonce is not consumed**.
+    /// This lets operators issue short-lived cancel permits: if the permit is
+    /// not submitted before its deadline the nonce remains available for a
+    /// fresh cancel permit with a new expiry window.
+    ///
+    /// Setting `permit_expiry_ts` to `0` disables the expiry check entirely.
+    ///
     /// # Events
     ///
     /// Publishes `(perm_canc, business)` → `PermitCancelledEvent`.
     ///
     /// # Panics
     /// - `cancel_permit.business` auth is missing or invalid
+    /// - `cancel_permit.permit_expiry_ts` is non-zero and `now > permit_expiry_ts`
     /// - Nonce mismatch or replay (via `verify_and_increment_nonce`)
     pub fn cancel_delegated_permit(env: Env, cancel_permit: CancelPermit) {
+        // Auth first – cheapest guard.
         cancel_permit.business.require_auth();
+
+        // Expiry check: reject BEFORE consuming the nonce so the nonce can be
+        // reused with a fresh (non-expired) cancel permit.
+        if cancel_permit.permit_expiry_ts != 0
+            && env.ledger().timestamp() > cancel_permit.permit_expiry_ts
+        {
+            panic!("cancel permit has expired");
+        }
+
         replay_protection::verify_and_increment_nonce(
             &env,
             &cancel_permit.business,
             NONCE_CHANNEL_PERMIT,
             cancel_permit.nonce,
         );
-        events::emit_permit_cancelled(&env, &cancel_permit.business, cancel_permit.nonce);
+        events::emit_permit_cancelled(
+            &env,
+            &cancel_permit.business,
+            cancel_permit.nonce,
+            cancel_permit.permit_expiry_ts,
+        );
     }
 
     pub fn submit_attestation(
@@ -3418,6 +3457,8 @@ mod multisig_test;
 mod pause_test;
 #[cfg(test)]
 mod permit_test;
+#[cfg(test)]
+mod permit_expiry_test;
 #[cfg(test)]
 mod timelock_fees_test;
 #[cfg(all(test, feature = "full-tests"))]
