@@ -6,6 +6,7 @@
 .env
 .DS_Store
 **/test_snapshots
+temp_auto_push.bat
 
 # Test snapshots
 **/test_snapshots/
@@ -14,3 +15,5 @@
 __pycache__/
 *.pyc
 .keys/private.pem
+.gitignore
+branch_structure.json
